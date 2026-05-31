@@ -1,0 +1,798 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Memory River Demo</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: #000;
+        font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+      }
+
+      canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+        cursor: default;
+      }
+
+      .hint {
+        position: fixed;
+        right: 24px;
+        bottom: 20px;
+        color: rgba(220, 238, 255, 0.52);
+        font-size: 12px;
+        letter-spacing: 0;
+        pointer-events: none;
+      }
+
+      .debug-toggle {
+        position: fixed;
+        top: 16px;
+        right: 18px;
+        width: 28px;
+        height: 28px;
+        border: 1px solid rgba(220, 238, 255, 0.2);
+        border-radius: 999px;
+        background: rgba(8, 12, 18, 0.32);
+        color: rgba(220, 238, 255, 0.46);
+        cursor: pointer;
+        font: 12px/1 "Consolas", monospace;
+      }
+
+      .debug-toggle:hover {
+        border-color: rgba(220, 238, 255, 0.42);
+        color: rgba(220, 238, 255, 0.78);
+      }
+
+      .memory-card {
+        position: fixed;
+        z-index: 2;
+        width: min(320px, calc(100vw - 32px));
+        padding: 16px 18px 15px;
+        border: 1px solid rgba(190, 232, 255, 0.22);
+        border-radius: 8px;
+        background: rgba(7, 13, 20, 0.78);
+        color: rgba(232, 246, 255, 0.92);
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45), 0 0 24px rgba(104, 190, 255, 0.12);
+        backdrop-filter: blur(14px);
+        opacity: 0;
+        transform: translate(-50%, calc(-100% - 18px)) scale(0.97);
+        pointer-events: none;
+        transition: opacity 180ms ease, transform 180ms ease;
+      }
+
+      .memory-card.is-visible {
+        opacity: 1;
+        transform: translate(-50%, calc(-100% - 24px)) scale(1);
+      }
+
+      .memory-card h2 {
+        margin: 0 0 8px;
+        font-size: 17px;
+        font-weight: 600;
+        line-height: 1.25;
+        letter-spacing: 0;
+      }
+
+      .memory-card p {
+        margin: 0;
+        color: rgba(213, 232, 245, 0.72);
+        font-size: 13px;
+        line-height: 1.7;
+      }
+
+      .memory-card .meta {
+        margin-top: 12px;
+        color: rgba(169, 214, 245, 0.62);
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="river"></canvas>
+    <button class="debug-toggle" id="debugToggle" aria-label="toggle control points">pts</button>
+    <div class="memory-card" id="memoryCard" aria-live="polite">
+      <h2 id="cardTitle"></h2>
+      <p id="cardBody"></p>
+      <div class="meta" id="cardMeta"></div>
+    </div>
+    <div class="hint">滚轮回顾记忆，悬浮物品唤起记忆，点击查看说明</div>
+
+    <script>
+      const canvas = document.getElementById("river");
+      const ctx = canvas.getContext("2d", { alpha: false });
+      const card = document.getElementById("memoryCard");
+      const cardTitle = document.getElementById("cardTitle");
+      const cardBody = document.getElementById("cardBody");
+      const cardMeta = document.getElementById("cardMeta");
+      const pointer = { x: -9999, y: -9999, active: false };
+      const particles = [];
+      const particleCount = 42000;
+      const maxParticleCount = 76000;
+      const DPR_CAP = 2;
+      const SPRITE_SRC =
+        "output/icons_outline_user/生成一张-4-4-图标-共-16-个独立图标-整体风格-立体线稿简笔画-icon-4e8ecfb1-1.png";
+      const iconSprite = new Image();
+      iconSprite.src = SPRITE_SRC;
+      const FISH_SPRITE_SRC = "output/fish/create-a-transparent-background-png-spri-abf9c474-1.png";
+      const fishSprite = new Image();
+      fishSprite.src = FISH_SPRITE_SRC;
+
+      let showControlPoints = false;
+      let width = 0;
+      let height = 0;
+      let dpr = 1;
+      let time = 0;
+      let introStartedAt = performance.now();
+      let hoveredItem = null;
+      let selectedItem = null;
+      let scrollOffset = -0.18;
+      let targetScrollOffset = -0.18;
+      let fishDirection = 1;
+      let fishDirectionTarget = 1;
+      let flowDirection = 1;
+      let flowTempo = 1;
+      let flowTempoTarget = 1;
+      let lastWheelAt = 0;
+      const SCROLL_MIN = -0.18;
+      const SCROLL_MAX = 0.655;
+
+      const riverPoints = [
+        { x: 0.0, y: 0.02 },
+        { x: 0.1, y: 0.05 },
+        { x: 0.04, y: 0.09 },
+        { x: 0.15, y: 0.16 },
+        { x: 0.07, y: 0.27 },
+        { x: 0.17, y: 0.45 },
+        { x: 0.36, y: 0.48 },
+        { x: 0.58, y: 0.53 },
+        { x: 0.74, y: 0.62 },
+        { x: 0.88, y: 0.78 },
+        { x: 1.0, y: 1.0 }
+      ];
+
+      const memoryItems = [
+        ["第一次离家", "半透明行李箱", "离开熟悉的房间，第一次把自己交给更远的生活。", "生活 / 离家"],
+        ["亲人离世", "蜡烛", "失去让时间突然变慢，也让某些牵挂变得很长。", "家庭 / 失去"],
+        ["买房", "钥匙", "一把钥匙把漂浮感暂时钉住，生活开始有了固定坐标。", "生活 / 安定"],
+        ["出国", "飞机", "跨过边界之后，世界变大，自己也被迫重新定位。", "生活 / 迁移"],
+        ["高考", "数学公式", "一场考试压缩了许多年的努力、紧张和期待。", "学业 / 转折"],
+        ["暗恋", "爱心信封", "很多话没有说出口，却在心里留下了非常清楚的回声。", "关系 / 悸动"],
+        ["吵架", "裂开的杯子", "关系里的裂纹被看见，有些边界也第一次变得清楚。", "关系 / 冲突"],
+        ["结婚", "戒指", "两段人生在某个承诺里靠近，开始共享未来的重量。", "关系 / 承诺"],
+        ["获奖", "奖杯", "努力短暂发光，被别人看见，也被自己重新确认。", "成就 / 高光"],
+        ["难忘旅行", "拍立得", "陌生地方的一帧画面，后来变成反复想起的坐标。", "生活 / 旅行"],
+        ["玩游戏", "Steam 图标", "虚拟世界里的投入、逃离、胜负和陪伴，也是真实记忆。", "兴趣 / 游戏"],
+        ["第一次花自己的钱", "硬币", "独立感从一次小小的购买开始，有了真实的触感。", "财务 / 独立"],
+        ["换城市", "纸飞机", "从一个地方飞向另一个地方，旧路径被折进纸里。", "生活 / 迁移"],
+        ["第一次挣到 10w", "10w", "数字背后是能力被验证的时刻，也是野心变具体的时刻。", "财务 / 里程碑"],
+        ["相爱", "两颗爱心", "一个人开始进入生活的中心，世界因此变得更亮也更脆弱。", "关系 / 相爱"],
+        ["工作", "电脑", "日常被任务、协作和责任重排，新的身份开始形成。", "工作 / 入场"]
+      ].map((item, index) => ({
+        id: index,
+        title: item[0],
+        icon: item[1],
+        body: item[2],
+        meta: item[3],
+        spriteIndex: index,
+        baseT: 0.045 + index * 0.057,
+        lane: [-0.46, -0.2, 0.18, 0.44][index % 4],
+        laneDrift: 0.045 + (index % 3) * 0.018,
+        phaseA: index * 1.73,
+        phaseB: index * 2.41 + 0.7,
+        bob: index * 1.19 + 0.4,
+        hover: 0,
+        screen: { x: -9999, y: -9999, r: 0, visible: false }
+      }));
+
+      function resize() {
+        dpr = Math.min(window.devicePixelRatio || 1, DPR_CAP);
+        width = window.innerWidth;
+        height = window.innerHeight;
+        canvas.width = Math.floor(width * dpr);
+        canvas.height = Math.floor(height * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+
+      function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+      }
+
+      function lerp(a, b, t) {
+        return a + (b - a) * t;
+      }
+
+      function smoothstep(edge0, edge1, value) {
+        const t = clamp((value - edge0) / (edge1 - edge0), 0, 1);
+        return t * t * (3 - 2 * t);
+      }
+
+      function catmullRom(p0, p1, p2, p3, t) {
+        const t2 = t * t;
+        const t3 = t2 * t;
+        return {
+          x:
+            0.5 *
+            ((2 * p1.x) +
+              (-p0.x + p2.x) * t +
+              (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
+              (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
+          y:
+            0.5 *
+            ((2 * p1.y) +
+              (-p0.y + p2.y) * t +
+              (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
+              (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3)
+        };
+      }
+
+      function centerAt(t) {
+        const total = riverPoints.length - 1;
+        const scaled = clamp(t, 0, 1) * total;
+        const idx = Math.floor(scaled);
+        const localT = scaled - idx;
+        const i0 = Math.max(0, idx - 1);
+        const i1 = idx;
+        const i2 = Math.min(riverPoints.length - 1, idx + 1);
+        const i3 = Math.min(riverPoints.length - 1, idx + 2);
+        const curve = catmullRom(riverPoints[i0], riverPoints[i1], riverPoints[i2], riverPoints[i3], localT);
+        return {
+          x: curve.x * width,
+          y: curve.y * height
+        };
+      }
+
+      function tangentAt(t) {
+        const a = centerAt(clamp(t - 0.004, 0, 1));
+        const b = centerAt(clamp(t + 0.004, 0, 1));
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len = Math.hypot(dx, dy) || 1;
+        return { x: dx / len, y: dy / len };
+      }
+
+      function curveIntensityAt(t) {
+        const a = tangentAt(clamp(t - 0.012, 0, 1));
+        const b = tangentAt(clamp(t + 0.012, 0, 1));
+        const dot = clamp(a.x * b.x + a.y * b.y, -1, 1);
+        return clamp((1 - dot) * 5.8, 0, 1);
+      }
+
+      function riverWidthAt(t) {
+        const nearScale = 0.45 + Math.pow(t, 1.45) * 12.15;
+        const transition = clamp((t - 0.36) / 0.18, 0, 1);
+        const smoothTransition = transition * transition * (3 - 2 * transition);
+        const earlyReduction = 0.5 + smoothTransition * 0.5;
+        const segmentT = t * (riverPoints.length - 1);
+        const segment12 = segmentT >= 1 && segmentT <= 2 ? 0.9 : 1;
+        const segment34 = segmentT >= 3 && segmentT <= 4 ? 1.22 : 1;
+        const base = Math.min(width, height) * 0.055 * nearScale;
+        const pulse = Math.sin(t * Math.PI * 3.4) * Math.min(width, height) * 0.012;
+        return (base + pulse) * earlyReduction * segment12 * segment34;
+      }
+
+      function flowBoostAt(t) {
+        const segmentT = t * (riverPoints.length - 1);
+        if (segmentT >= 1 && segmentT <= 2) return 1.22;
+        if (segmentT < 6) return 1;
+        const local = clamp((segmentT - 6) / 4, 0, 1);
+        const smoothLocal = local * local * (3 - 2 * local);
+        return 1 + smoothLocal * 0.5;
+      }
+
+      function densityBoostAt(t) {
+        const widthRatio = riverWidthAt(clamp(t, 0, 1)) / Math.max(1, Math.min(width, height));
+        return 0.7 + Math.pow(widthRatio, 0.72) * 1.9;
+      }
+
+      function particleRadiusLimits(displaySegmentT) {
+        if (displaySegmentT < 3) {
+          const local = displaySegmentT / 3;
+          return { min: 0.26 + local * 0.14, max: 0.96 + local * 0.49 };
+        }
+        if (displaySegmentT < 5) {
+          const local = (displaySegmentT - 3) / 2;
+          return { min: 0.4, max: 1.45 + local * 0.25 };
+        }
+        if (displaySegmentT < 6) return { min: 0.4, max: 1.7 };
+        if (displaySegmentT < 7) return { min: 0.4, max: 1.7 + (displaySegmentT - 6) * 0.1 };
+        return { min: 0.4, max: 1.8 };
+      }
+
+      function riverWeightAt(t) {
+        const widthRatio = riverWidthAt(clamp(t, 0, 1)) / Math.max(1, Math.min(width, height));
+        return clamp(0.08 + Math.pow(widthRatio, 0.78) * 3.2, 0, 1);
+      }
+
+      function weightedRiverT() {
+        if (Math.random() < 0.34) return 0.94 + Math.pow(Math.random(), 0.72) * 0.06;
+        for (let i = 0; i < 24; i += 1) {
+          const candidate = Math.random();
+          if (Math.random() < riverWeightAt(candidate)) return candidate;
+        }
+        return Math.pow(Math.random(), 0.48);
+      }
+
+      function resetParticle(p, randomT = true) {
+        p.t = randomT ? weightedRiverT() : Math.random();
+        p.side = (Math.random() - 0.5) * 2;
+        p.offset = Math.pow(Math.random(), 0.65) * p.side;
+        p.baseSpeed = 0.00032 + Math.random() * 0.00034;
+        p.size = 0.55 + Math.random() * 1.45;
+        p.alpha = 0.13 + Math.random() * 0.58;
+        p.phase = Math.random() * Math.PI * 2;
+        p.twinkle = 0.55 + Math.random() * 0.7;
+        p.thinSeed = Math.random();
+        p.life = randomT ? Math.random() : 0;
+        p.dead = false;
+      }
+
+      function sourceT(direction) {
+        if (direction < 0) {
+          const r = Math.pow(Math.random(), 0.78);
+          return 0.985 + r * 0.08;
+        }
+        const r = Math.pow(Math.random(), 1.45);
+        return -0.035 + r * 0.2;
+      }
+
+      function makeEmissionRoom(direction, needed) {
+        let removed = 0;
+        for (let i = particles.length - 1; i >= 0 && removed < needed; i -= 1) {
+          const p = particles[i];
+          const inExitZone = direction < 0 ? p.t < 0.16 : p.t > 0.84;
+          if (!p.dead && !inExitZone) continue;
+          particles.splice(i, 1);
+          removed += 1;
+        }
+        return removed;
+      }
+
+      function emitSourceParticles(direction) {
+        const sourceCenter = direction < 0 ? 0.95 : 0.06;
+        const sourceWidth = riverWidthAt(sourceCenter);
+        const widthRatio = clamp(sourceWidth / Math.max(1, Math.min(width, height)), 0, 1);
+        const emitCount = Math.round((12 + widthRatio * 87) * flowTempo);
+        if (particles.length + emitCount > maxParticleCount) {
+          makeEmissionRoom(direction, particles.length + emitCount - maxParticleCount);
+        }
+        const count = Math.min(emitCount, Math.max(0, maxParticleCount - particles.length));
+
+        for (let i = 0; i < count; i += 1) {
+          const p = {};
+          resetParticle(p, false);
+          p.t = sourceT(direction);
+          p.life = Math.random() * 0.28;
+          particles.push(p);
+        }
+      }
+
+      function particleEdgeFade(t, direction) {
+        if (direction < 0) {
+          const enterFade = smoothstep(1.035, 0.96, t);
+          const exitFade = 1 - smoothstep(0.02, -0.05, t);
+          return clamp(enterFade * exitFade, 0, 1);
+        }
+
+        const enterFade = smoothstep(-0.04, 0.035, t);
+        const exitFade = 1 - smoothstep(0.96, 1.055, t);
+        return clamp(enterFade * exitFade, 0, 1);
+      }
+
+      function segmentParticleSurvival(segmentT) {
+        const reduction = 0.52;
+        const fadeInReduction = smoothstep(0.88, 1.18, segmentT);
+        const fadeOutReduction = 1 - smoothstep(4.0, 5.0, segmentT);
+        return clamp(1 - reduction * fadeInReduction * fadeOutReduction, 0.42, 1);
+      }
+
+      function itemPose(item) {
+        const t = item.baseT + scrollOffset;
+        item.screen.visible = t > -0.08 && t < 1.08;
+        if (!item.screen.visible) return null;
+
+        const visibleT = clamp(t, 0.002, 0.998);
+        const c = centerAt(visibleT);
+        const tangent = tangentAt(visibleT);
+        const normal = { x: -tangent.y, y: tangent.x };
+        const riverW = riverWidthAt(visibleT);
+        const viewportBase = Math.min(width, height);
+        const widthRatio = riverW / viewportBase;
+        const widthPerspective = clamp((widthRatio - 0.02) / 0.52, 0, 1);
+        const depthPerspective = clamp((visibleT - 0.04) / 0.92, 0, 1);
+        const perspective = 0.34 + Math.pow(widthPerspective, 0.72) * 1.62 + Math.pow(depthPerspective, 1.45) * 0.42;
+        const size = clamp(viewportBase * 0.058 * perspective, 22, Math.min(168, viewportBase * 0.22));
+        const localFlow = visibleT * Math.PI * 2;
+        const laneWave =
+          Math.sin(localFlow * 2.1 + item.phaseA + scrollOffset * 7.5) * item.laneDrift +
+          Math.sin(localFlow * 4.7 + item.phaseB - scrollOffset * 4.1) * item.laneDrift * 0.46;
+        const tangentDrift =
+          Math.sin(localFlow * 3.4 + item.phaseB + scrollOffset * 5.8) * riverW * 0.035;
+        const bob = Math.sin(time * 0.032 + item.bob) * (3.5 + widthPerspective * 4.5);
+        const lift = item.hover * Math.min(18, size * 0.22);
+        const laneOffset = clamp(item.lane + laneWave, -0.58, 0.58);
+        const x = c.x + normal.x * riverW * laneOffset + tangent.x * tangentDrift;
+        const y = c.y + normal.y * riverW * laneOffset + tangent.y * tangentDrift + bob - lift;
+        const segmentT = visibleT * (riverPoints.length - 1);
+        const farFade = smoothstep(2.0, 3.12, segmentT);
+        const edgeFade = smoothstep(-0.02, 0.06, t) * (1 - smoothstep(1.0, 1.08, t));
+        const particleDistanceFade = clamp(0.48 + visibleT * 0.95, 0, 1);
+        const earlyRiverDimming = segmentT >= 1 && segmentT <= 2.08 ? 0.48 : 1;
+        const introFade = smoothstep(0, 2600, performance.now() - introStartedAt);
+        const restingPresence = 0.58 + item.hover * 0.42;
+        const alpha = clamp(
+          farFade * edgeFade * particleDistanceFade * earlyRiverDimming * introFade * restingPresence,
+          0,
+          1
+        );
+        item.screen = { x, y, r: size * 0.58, visible: alpha > 0.035 };
+        return { x, y, size, t: visibleT, tangent, normal, alpha };
+      }
+
+      function initParticles() {
+        particles.length = 0;
+        for (let i = 0; i < particleCount; i += 1) {
+          const p = {};
+          resetParticle(p, true);
+          particles.push(p);
+        }
+      }
+
+      function drawControlPoints() {
+        if (!showControlPoints) return;
+
+        ctx.save();
+        ctx.font = "12px Consolas, monospace";
+        ctx.lineWidth = 1;
+
+        for (let i = 0; i < riverPoints.length; i += 1) {
+          const point = riverPoints[i];
+          const x = point.x * width;
+          const y = point.y * height;
+
+          ctx.beginPath();
+          ctx.fillStyle = "rgba(255, 72, 86, 0.95)";
+          ctx.arc(x, y, 5, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.fillStyle = "rgba(255, 150, 158, 0.95)";
+          ctx.fillText(`${i}: ${point.x.toFixed(2)}, ${point.y.toFixed(2)}`, x + 8, y - 8);
+        }
+
+        ctx.restore();
+      }
+
+      function drawRiverParticles() {
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const direction = flowDirection >= 0 ? -1 : 1;
+        emitSourceParticles(direction);
+
+        for (const p of particles) {
+          const clampedT = clamp(p.t, 0, 1);
+          const speedScale = (0.33 + Math.pow(clampedT, 1.75) * 1.42) * flowBoostAt(clampedT) * flowTempo;
+          p.t += p.baseSpeed * speedScale * direction;
+          p.life = Math.min(1, p.life + 0.018 * flowTempo);
+          if (direction > 0 && p.t > 1.065) {
+            p.dead = true;
+            continue;
+          }
+          if (direction < 0 && p.t < -0.065) {
+            p.dead = true;
+            continue;
+          }
+
+          const drawT = clamp(p.t, 0, 1);
+          const c = centerAt(drawT);
+          const tangent = tangentAt(drawT);
+          const normal = { x: -tangent.y, y: tangent.x };
+          const riverW = riverWidthAt(drawT);
+          const curveIntensity = curveIntensityAt(drawT);
+          const wave = Math.sin(time * 0.025 + p.phase + drawT * 9) * 0.12;
+          const bendSpread = 1 + curveIntensity * 0.42;
+          const x = c.x + normal.x * riverW * (p.offset * bendSpread + wave * 0.12);
+          const y = c.y + normal.y * riverW * (p.offset * bendSpread + wave * 0.12);
+          const segmentT = drawT * (riverPoints.length - 1);
+          const densityBoost = densityBoostAt(drawT);
+          const shimmer = 0.72 + Math.sin(time * 0.04 * p.twinkle + p.phase) * 0.28;
+          const bendDimming = 1 - curveIntensity * 0.46;
+          const edgeFade = particleEdgeFade(p.t, direction);
+          if (edgeFade <= 0.002) continue;
+          if (p.thinSeed > segmentParticleSurvival(segmentT)) continue;
+          const radiusLimits = particleRadiusLimits(segmentT);
+          const sizeRatio = clamp((p.size - 0.55) / 1.45, 0, 1);
+          const radius =
+            (radiusLimits.min + sizeRatio * (radiusLimits.max - radiusLimits.min)) *
+            (1 - curveIntensity * 0.12);
+
+          ctx.beginPath();
+          ctx.fillStyle = `rgba(190, 232, 255, ${
+            p.alpha * p.life * edgeFade * shimmer * bendDimming * densityBoost
+          })`;
+          ctx.arc(x, y, radius, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        for (let i = particles.length - 1; i >= 0; i -= 1) {
+          if (particles[i].dead) particles.splice(i, 1);
+        }
+
+        ctx.restore();
+      }
+
+      function drawItemGlow(x, y, size, item, alpha) {
+        if (item.hover <= 0.01) return;
+
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.globalCompositeOperation = "lighter";
+        const count = Math.floor(18 + item.hover * 34);
+        for (let i = 0; i < count; i += 1) {
+          const angle = (i / count) * Math.PI * 2 + time * 0.012 + item.bob;
+          const jitter = Math.sin(time * 0.05 + i * 2.1 + item.bob) * size * 0.045;
+          const r = size * (0.47 + item.hover * 0.17) + jitter;
+          const px = x + Math.cos(angle) * r;
+          const py = y + Math.sin(angle) * r * 0.86;
+          const pr = 0.8 + Math.sin(time * 0.08 + i) * 0.4;
+          ctx.beginPath();
+          ctx.fillStyle = `rgba(190, 236, 255, ${0.12 + item.hover * 0.32})`;
+          ctx.arc(px, py, pr, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+
+      function drawIconRegion(spriteIndex, x, y, size, fromRatio, toRatio, alpha, fadeDown = false, rotation = 0) {
+        if (toRatio <= fromRatio || alpha <= 0) return;
+
+        const col = spriteIndex % 4;
+        const row = Math.floor(spriteIndex / 4);
+        const sx = col * 256;
+        const sy = row * 256;
+        const half = size / 2;
+
+        if (!iconSprite.complete || iconSprite.naturalWidth <= 0) {
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.rotate(rotation);
+          ctx.globalAlpha = alpha;
+          ctx.beginPath();
+          ctx.arc(0, 0, half * 0.58, 0, Math.PI * 2);
+          ctx.strokeStyle = "rgba(196, 234, 255, 0.72)";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          ctx.restore();
+          return;
+        }
+
+        if (!fadeDown) {
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.rotate(rotation);
+          ctx.globalAlpha = alpha;
+          ctx.drawImage(
+            iconSprite,
+            sx,
+            sy + 256 * fromRatio,
+            256,
+            256 * (toRatio - fromRatio),
+            -half,
+            -half + size * fromRatio,
+            size,
+            size * (toRatio - fromRatio)
+          );
+          ctx.restore();
+          return;
+        }
+
+        const slices = Math.max(8, Math.ceil((toRatio - fromRatio) * 42));
+        for (let i = 0; i < slices; i += 1) {
+          const a = fromRatio + ((toRatio - fromRatio) * i) / slices;
+          const b = fromRatio + ((toRatio - fromRatio) * (i + 1)) / slices;
+          const local = i / Math.max(1, slices - 1);
+          const sliceAlpha = alpha * Math.pow(1 - local, 1.35);
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.rotate(rotation);
+          ctx.globalAlpha = sliceAlpha;
+          ctx.drawImage(
+            iconSprite,
+            sx,
+            sy + 256 * a,
+            256,
+            256 * (b - a),
+            -half,
+            -half + size * a,
+            size,
+            size * (b - a) + 1
+          );
+          ctx.restore();
+        }
+      }
+
+      function drawMemoryItem(item, layer) {
+        const pose = itemPose(item);
+        if (!pose) return;
+
+        const { x, y, size, alpha, tangent } = pose;
+        if (alpha <= 0.035) return;
+        const sink = size * (0.18 - item.hover * 0.06);
+        const drawSize = size * (1 + item.hover * 0.07);
+        const drawY = y - sink;
+        const solidEnd = lerp(1 / 5, 1, item.hover);
+        const fadeEnd = lerp(3 / 5, 1, item.hover);
+        const iconAlpha = alpha * (0.64 + item.hover * 0.36);
+        const riverAngle = Math.atan2(tangent.y, tangent.x);
+        const sideTilt = item.lane < 0 ? -0.36 : 0.36;
+        const flowTilt = clamp(riverAngle, -0.8, 0.8) * 0.28;
+        const tiltAmount = Math.pow(1 - item.hover, 1.4);
+        const tilt = (sideTilt + flowTilt + Math.sin(item.bob) * 0.06) * tiltAmount;
+
+        if (layer === "back") {
+          drawIconRegion(item.spriteIndex, x, drawY, drawSize, solidEnd, fadeEnd, iconAlpha, true, tilt);
+          return;
+        }
+
+        drawIconRegion(item.spriteIndex, x, drawY, drawSize, 0, solidEnd, iconAlpha, false, tilt);
+        drawItemGlow(x, drawY, drawSize, item, alpha);
+      }
+
+      function drawFish() {
+        const fishAnchorT = 8 / (riverPoints.length - 1);
+        const fishT = fishAnchorT;
+        const c = centerAt(fishT);
+        const tangent = tangentAt(fishT);
+        const normal = { x: -tangent.y, y: tangent.x };
+        const riverW = riverWidthAt(fishT);
+        const x = c.x - riverW * 0.22;
+        const y = c.y - riverW * 0.2 + Math.sin(time * 0.06) * 7;
+        const angle = Math.atan2(tangent.y, tangent.x);
+        const scale = clamp(Math.min(width, height) * 0.0012, 0.52, 0.9);
+        const fishIntroFade = smoothstep(0, 2800, performance.now() - introStartedAt);
+
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(angle);
+        ctx.scale(scale, scale);
+        ctx.globalAlpha = fishIntroFade;
+
+        if (fishSprite.complete && fishSprite.naturalWidth > 0) {
+          const goingBack = fishDirectionTarget < 0;
+          const sx = goingBack ? 512 : 0;
+          const sway = Math.sin(time * (goingBack ? 0.16 : 0.1)) * 3.5;
+          ctx.drawImage(fishSprite, sx, 0, 512, 1024, -118, -118 + sway, 236, 236);
+        } else {
+          ctx.fillStyle = "rgba(218, 244, 255, 0.76)";
+          ctx.beginPath();
+          ctx.ellipse(0, 0, 38, 15, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.restore();
+      }
+
+      function updateHover() {
+        let nextHover = null;
+        if (pointer.active) {
+          for (let i = memoryItems.length - 1; i >= 0; i -= 1) {
+            const item = memoryItems[i];
+            if (!item.screen.visible) continue;
+            const dist = Math.hypot(pointer.x - item.screen.x, pointer.y - item.screen.y);
+            if (dist < item.screen.r * 1.04) {
+              nextHover = item;
+              break;
+            }
+          }
+        }
+        hoveredItem = nextHover;
+        canvas.style.cursor = hoveredItem ? "pointer" : "default";
+
+        for (const item of memoryItems) {
+          item.hover = lerp(item.hover, item === hoveredItem ? 1 : 0, 0.14);
+        }
+      }
+
+      function showCard(item) {
+        selectedItem = item;
+        cardTitle.textContent = `${item.title} · ${item.icon}`;
+        cardBody.textContent = item.body;
+        cardMeta.textContent = item.meta;
+        card.classList.add("is-visible");
+        positionCard();
+      }
+
+      function hideCard() {
+        selectedItem = null;
+        card.classList.remove("is-visible");
+      }
+
+      function positionCard() {
+        if (!selectedItem || !selectedItem.screen.visible) {
+          card.classList.remove("is-visible");
+          return;
+        }
+
+        const x = clamp(selectedItem.screen.x, 168, width - 168);
+        const y = clamp(selectedItem.screen.y - selectedItem.screen.r * 0.35, 126, height - 24);
+        card.style.left = `${x}px`;
+        card.style.top = `${y}px`;
+      }
+
+      function draw() {
+        const now = performance.now();
+        if (now - lastWheelAt > 1200) {
+          fishDirectionTarget = 1;
+          flowTempoTarget = 1;
+        }
+        fishDirection = lerp(fishDirection, fishDirectionTarget, 0.11);
+        flowDirection = fishDirectionTarget;
+        flowTempo = lerp(flowTempo, flowTempoTarget, 0.08);
+        time += flowTempo;
+        const scrollBlend = clamp(0.09 * flowTempo, 0.04, 0.18);
+        scrollOffset = lerp(scrollOffset, targetScrollOffset, scrollBlend);
+
+        ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+        ctx.fillRect(0, 0, width, height);
+
+        updateHover();
+        const drawItems = [...memoryItems].sort((a, b) => a.baseT + scrollOffset - (b.baseT + scrollOffset));
+        for (const item of drawItems) drawMemoryItem(item, "back");
+        drawRiverParticles();
+        for (const item of drawItems) drawMemoryItem(item, "front");
+        drawFish();
+        drawControlPoints();
+        positionCard();
+        requestAnimationFrame(draw);
+      }
+
+      window.addEventListener("resize", resize);
+      window.addEventListener("pointermove", (event) => {
+        pointer.x = event.clientX;
+        pointer.y = event.clientY;
+        pointer.active = true;
+      });
+      window.addEventListener("pointerleave", () => {
+        pointer.active = false;
+      });
+      canvas.addEventListener("click", () => {
+        if (hoveredItem) {
+          showCard(hoveredItem);
+        } else {
+          hideCard();
+        }
+      });
+      window.addEventListener(
+        "wheel",
+        (event) => {
+          event.preventDefault();
+          targetScrollOffset = clamp(targetScrollOffset - event.deltaY * 0.00046, SCROLL_MIN, SCROLL_MAX);
+          fishDirectionTarget = event.deltaY > 0 ? 1 : -1;
+          flowTempoTarget = clamp(1 + Math.min(0.55, Math.abs(event.deltaY) * 0.0016), 1, 1.55);
+          lastWheelAt = performance.now();
+          hideCard();
+        },
+        { passive: false }
+      );
+      document.getElementById("debugToggle").addEventListener("click", () => {
+        showControlPoints = !showControlPoints;
+      });
+
+      resize();
+      initParticles();
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, width, height);
+      draw();
+    </script>
+  </body>
+</html>

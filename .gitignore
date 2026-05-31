@@ -1,0 +1,10 @@
+# Ignore everything by default.
+*
+
+# Keep directory traversal available for allowlisted files.
+!*/
+
+# Files allowed to be committed and uploaded.
+!/.gitignore
+!/README.md
+!/particle_river_demo.html
