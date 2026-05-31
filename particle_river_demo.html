@@ -118,8 +118,7 @@
       const cardMeta = document.getElementById("cardMeta");
       const pointer = { x: -9999, y: -9999, active: false };
       const particles = [];
-      const particleCount = 42000;
-      const maxParticleCount = 76000;
+      const particleCount = 12800;
       const DPR_CAP = 2;
       const SPRITE_SRC =
         "output/icons_outline_user/生成一张-4-4-图标-共-16-个独立图标-整体风格-立体线稿简笔画-icon-4e8ecfb1-1.png";
@@ -137,13 +136,11 @@
       let introStartedAt = performance.now();
       let hoveredItem = null;
       let selectedItem = null;
-      let scrollOffset = -0.18;
-      let targetScrollOffset = -0.18;
+      let scrollOffset = 0;
+      let targetScrollOffset = 0;
       let fishDirection = 1;
       let fishDirectionTarget = 1;
       let flowDirection = 1;
-      let flowTempo = 1;
-      let flowTempoTarget = 1;
       let lastWheelAt = 0;
       const SCROLL_MIN = -0.18;
       const SCROLL_MAX = 0.655;
@@ -187,11 +184,8 @@
         meta: item[3],
         spriteIndex: index,
         baseT: 0.045 + index * 0.057,
-        lane: [-0.46, -0.2, 0.18, 0.44][index % 4],
-        laneDrift: 0.045 + (index % 3) * 0.018,
-        phaseA: index * 1.73,
-        phaseB: index * 2.41 + 0.7,
-        bob: index * 1.19 + 0.4,
+        side: index % 2 === 0 ? -0.28 - Math.random() * 0.22 : 0.22 + Math.random() * 0.24,
+        bob: Math.random() * Math.PI * 2,
         hover: 0,
         screen: { x: -9999, y: -9999, r: 0, visible: false }
       }));
@@ -292,8 +286,11 @@
       }
 
       function densityBoostAt(t) {
-        const widthRatio = riverWidthAt(clamp(t, 0, 1)) / Math.max(1, Math.min(width, height));
-        return 0.7 + Math.pow(widthRatio, 0.72) * 1.9;
+        const segmentT = t * (riverPoints.length - 1);
+        if (segmentT < 5) return 1;
+        if (segmentT > 11) return 2;
+        const local = (segmentT - 5) / 6;
+        return 1 + local;
       }
 
       function particleRadiusLimits(displaySegmentT) {
@@ -310,91 +307,49 @@
         return { min: 0.4, max: 1.8 };
       }
 
-      function riverWeightAt(t) {
-        const widthRatio = riverWidthAt(clamp(t, 0, 1)) / Math.max(1, Math.min(width, height));
-        return clamp(0.08 + Math.pow(widthRatio, 0.78) * 3.2, 0, 1);
-      }
-
       function weightedRiverT() {
-        if (Math.random() < 0.34) return 0.94 + Math.pow(Math.random(), 0.72) * 0.06;
-        for (let i = 0; i < 24; i += 1) {
-          const candidate = Math.random();
-          if (Math.random() < riverWeightAt(candidate)) return candidate;
-        }
-        return Math.pow(Math.random(), 0.48);
+        const totalSegments = riverPoints.length - 1;
+        const segment = Math.floor(Math.random() * totalSegments);
+        const local = Math.random();
+        const baseT = (segment + local) / totalSegments;
+        const nearBoost = Math.random() < 0.28 ? Math.pow(Math.random(), 0.55) : baseT;
+        return Math.random() < 0.72 ? baseT : nearBoost;
       }
 
       function resetParticle(p, randomT = true) {
-        p.t = randomT ? weightedRiverT() : Math.random();
+        if (randomT && p.spawnStart !== undefined && p.spawnEnd !== undefined) {
+          p.t = p.spawnStart + Math.random() * (p.spawnEnd - p.spawnStart);
+        } else {
+          p.t = randomT ? weightedRiverT() : Math.random() * 0.025;
+        }
         p.side = (Math.random() - 0.5) * 2;
         p.offset = Math.pow(Math.random(), 0.65) * p.side;
-        p.baseSpeed = 0.00032 + Math.random() * 0.00034;
+        p.baseSpeed = 0.00034 + Math.random() * 0.00038;
         p.size = 0.55 + Math.random() * 1.45;
-        p.alpha = 0.13 + Math.random() * 0.58;
+        p.alpha = 0.16 + Math.random() * 0.62;
         p.phase = Math.random() * Math.PI * 2;
         p.twinkle = 0.55 + Math.random() * 0.7;
-        p.thinSeed = Math.random();
-        p.life = randomT ? Math.random() : 0;
-        p.dead = false;
+        p.life = 0;
       }
 
-      function sourceT(direction) {
+      function particleLowerBound(p) {
+        return p.spawnStart !== undefined ? p.spawnStart : 0;
+      }
+
+      function particleUpperBound(p) {
+        if (p.loopEnd !== undefined) return p.loopEnd;
+        if (p.spawnEnd !== undefined) return p.spawnEnd;
+        return 1.03;
+      }
+
+      function recycleParticle(p, direction) {
+        resetParticle(p, true);
         if (direction < 0) {
-          const r = Math.pow(Math.random(), 0.78);
-          return 0.985 + r * 0.08;
+          const lower = particleLowerBound(p);
+          const upper = particleUpperBound(p);
+          const edgeSpan = Math.min(0.035, Math.max(0.002, upper - lower));
+          p.t = upper - Math.random() * edgeSpan;
         }
-        const r = Math.pow(Math.random(), 1.45);
-        return -0.035 + r * 0.2;
-      }
-
-      function makeEmissionRoom(direction, needed) {
-        let removed = 0;
-        for (let i = particles.length - 1; i >= 0 && removed < needed; i -= 1) {
-          const p = particles[i];
-          const inExitZone = direction < 0 ? p.t < 0.16 : p.t > 0.84;
-          if (!p.dead && !inExitZone) continue;
-          particles.splice(i, 1);
-          removed += 1;
-        }
-        return removed;
-      }
-
-      function emitSourceParticles(direction) {
-        const sourceCenter = direction < 0 ? 0.95 : 0.06;
-        const sourceWidth = riverWidthAt(sourceCenter);
-        const widthRatio = clamp(sourceWidth / Math.max(1, Math.min(width, height)), 0, 1);
-        const emitCount = Math.round((12 + widthRatio * 87) * flowTempo);
-        if (particles.length + emitCount > maxParticleCount) {
-          makeEmissionRoom(direction, particles.length + emitCount - maxParticleCount);
-        }
-        const count = Math.min(emitCount, Math.max(0, maxParticleCount - particles.length));
-
-        for (let i = 0; i < count; i += 1) {
-          const p = {};
-          resetParticle(p, false);
-          p.t = sourceT(direction);
-          p.life = Math.random() * 0.28;
-          particles.push(p);
-        }
-      }
-
-      function particleEdgeFade(t, direction) {
-        if (direction < 0) {
-          const enterFade = smoothstep(1.035, 0.96, t);
-          const exitFade = 1 - smoothstep(0.02, -0.05, t);
-          return clamp(enterFade * exitFade, 0, 1);
-        }
-
-        const enterFade = smoothstep(-0.04, 0.035, t);
-        const exitFade = 1 - smoothstep(0.96, 1.055, t);
-        return clamp(enterFade * exitFade, 0, 1);
-      }
-
-      function segmentParticleSurvival(segmentT) {
-        const reduction = 0.52;
-        const fadeInReduction = smoothstep(0.88, 1.18, segmentT);
-        const fadeOutReduction = 1 - smoothstep(4.0, 5.0, segmentT);
-        return clamp(1 - reduction * fadeInReduction * fadeOutReduction, 0.42, 1);
       }
 
       function itemPose(item) {
@@ -413,17 +368,10 @@
         const depthPerspective = clamp((visibleT - 0.04) / 0.92, 0, 1);
         const perspective = 0.34 + Math.pow(widthPerspective, 0.72) * 1.62 + Math.pow(depthPerspective, 1.45) * 0.42;
         const size = clamp(viewportBase * 0.058 * perspective, 22, Math.min(168, viewportBase * 0.22));
-        const localFlow = visibleT * Math.PI * 2;
-        const laneWave =
-          Math.sin(localFlow * 2.1 + item.phaseA + scrollOffset * 7.5) * item.laneDrift +
-          Math.sin(localFlow * 4.7 + item.phaseB - scrollOffset * 4.1) * item.laneDrift * 0.46;
-        const tangentDrift =
-          Math.sin(localFlow * 3.4 + item.phaseB + scrollOffset * 5.8) * riverW * 0.035;
-        const bob = Math.sin(time * 0.032 + item.bob) * (3.5 + widthPerspective * 4.5);
+        const bob = Math.sin(time * 0.032 + item.bob) * 3.5;
         const lift = item.hover * Math.min(18, size * 0.22);
-        const laneOffset = clamp(item.lane + laneWave, -0.58, 0.58);
-        const x = c.x + normal.x * riverW * laneOffset + tangent.x * tangentDrift;
-        const y = c.y + normal.y * riverW * laneOffset + tangent.y * tangentDrift + bob - lift;
+        const x = c.x + normal.x * riverW * item.side;
+        const y = c.y + normal.y * riverW * item.side + bob - lift;
         const segmentT = visibleT * (riverPoints.length - 1);
         const farFade = smoothstep(2.0, 3.12, segmentT);
         const edgeFade = smoothstep(-0.02, 0.06, t) * (1 - smoothstep(1.0, 1.08, t));
@@ -444,6 +392,27 @@
         particles.length = 0;
         for (let i = 0; i < particleCount; i += 1) {
           const p = {};
+          resetParticle(p, true);
+          particles.push(p);
+        }
+
+        for (let i = 0; i < particleCount; i += 1) {
+          if (Math.random() < 0.35) {
+            const p = {};
+            resetParticle(p, true);
+            p.t = 0.46 + Math.random() * 0.54;
+            particles.push(p);
+          }
+        }
+
+        for (let i = 0; i < particleCount * 0.2; i += 1) {
+          const p = { spawnStart: 0.48, spawnEnd: 1 };
+          resetParticle(p, true);
+          particles.push(p);
+        }
+
+        for (let i = 0; i < particleCount * 0.055; i += 1) {
+          const p = { spawnStart: 0, spawnEnd: 0.105, loopEnd: 0.115, steady: true };
           resetParticle(p, true);
           particles.push(p);
         }
@@ -476,40 +445,29 @@
       function drawRiverParticles() {
         ctx.save();
         ctx.globalCompositeOperation = "lighter";
-        const direction = flowDirection >= 0 ? -1 : 1;
-        emitSourceParticles(direction);
 
         for (const p of particles) {
-          const clampedT = clamp(p.t, 0, 1);
-          const speedScale = (0.33 + Math.pow(clampedT, 1.75) * 1.42) * flowBoostAt(clampedT) * flowTempo;
+          const speedScale = (0.29 + Math.pow(p.t, 1.8) * 1.48) * flowBoostAt(p.t);
+          const direction = flowDirection >= 0 ? 1 : -1;
           p.t += p.baseSpeed * speedScale * direction;
-          p.life = Math.min(1, p.life + 0.018 * flowTempo);
-          if (direction > 0 && p.t > 1.065) {
-            p.dead = true;
-            continue;
-          }
-          if (direction < 0 && p.t < -0.065) {
-            p.dead = true;
-            continue;
-          }
+          p.life = Math.min(1, p.life + 0.025);
+          if (direction > 0 && p.t > particleUpperBound(p)) recycleParticle(p, direction);
+          if (direction < 0 && p.t < particleLowerBound(p)) recycleParticle(p, direction);
 
-          const drawT = clamp(p.t, 0, 1);
-          const c = centerAt(drawT);
-          const tangent = tangentAt(drawT);
+          const c = centerAt(p.t);
+          const tangent = tangentAt(p.t);
           const normal = { x: -tangent.y, y: tangent.x };
-          const riverW = riverWidthAt(drawT);
-          const curveIntensity = curveIntensityAt(drawT);
-          const wave = Math.sin(time * 0.025 + p.phase + drawT * 9) * 0.12;
+          const riverW = riverWidthAt(p.t);
+          const curveIntensity = curveIntensityAt(p.t);
+          const wave = Math.sin(time * 0.025 + p.phase + p.t * 9) * 0.12;
           const bendSpread = 1 + curveIntensity * 0.42;
           const x = c.x + normal.x * riverW * (p.offset * bendSpread + wave * 0.12);
           const y = c.y + normal.y * riverW * (p.offset * bendSpread + wave * 0.12);
-          const segmentT = drawT * (riverPoints.length - 1);
-          const densityBoost = densityBoostAt(drawT);
+          const segmentT = p.t * (riverPoints.length - 1);
+          const densityBoost = densityBoostAt(p.t);
           const shimmer = 0.72 + Math.sin(time * 0.04 * p.twinkle + p.phase) * 0.28;
           const bendDimming = 1 - curveIntensity * 0.46;
-          const edgeFade = particleEdgeFade(p.t, direction);
-          if (edgeFade <= 0.002) continue;
-          if (p.thinSeed > segmentParticleSurvival(segmentT)) continue;
+          const segmentBrightness = segmentT >= 1 && segmentT <= 2 ? 0.48 : 1;
           const radiusLimits = particleRadiusLimits(segmentT);
           const sizeRatio = clamp((p.size - 0.55) / 1.45, 0, 1);
           const radius =
@@ -518,14 +476,10 @@
 
           ctx.beginPath();
           ctx.fillStyle = `rgba(190, 232, 255, ${
-            p.alpha * p.life * edgeFade * shimmer * bendDimming * densityBoost
+            p.alpha * p.life * shimmer * (0.48 + p.t * 0.95) * bendDimming * densityBoost * segmentBrightness
           })`;
           ctx.arc(x, y, radius, 0, Math.PI * 2);
           ctx.fill();
-        }
-
-        for (let i = particles.length - 1; i >= 0; i -= 1) {
-          if (particles[i].dead) particles.splice(i, 1);
         }
 
         ctx.restore();
@@ -634,7 +588,7 @@
         const fadeEnd = lerp(3 / 5, 1, item.hover);
         const iconAlpha = alpha * (0.64 + item.hover * 0.36);
         const riverAngle = Math.atan2(tangent.y, tangent.x);
-        const sideTilt = item.lane < 0 ? -0.36 : 0.36;
+        const sideTilt = item.side < 0 ? -0.36 : 0.36;
         const flowTilt = clamp(riverAngle, -0.8, 0.8) * 0.28;
         const tiltAmount = Math.pow(1 - item.hover, 1.4);
         const tilt = (sideTilt + flowTilt + Math.sin(item.bob) * 0.06) * tiltAmount;
@@ -649,6 +603,11 @@
       }
 
       function drawFish() {
+        const now = performance.now();
+        if (now - lastWheelAt > 1200) fishDirectionTarget = 1;
+        fishDirection = lerp(fishDirection, fishDirectionTarget, 0.11);
+        flowDirection = fishDirectionTarget;
+
         const fishAnchorT = 8 / (riverPoints.length - 1);
         const fishT = fishAnchorT;
         const c = centerAt(fishT);
@@ -730,17 +689,8 @@
       }
 
       function draw() {
-        const now = performance.now();
-        if (now - lastWheelAt > 1200) {
-          fishDirectionTarget = 1;
-          flowTempoTarget = 1;
-        }
-        fishDirection = lerp(fishDirection, fishDirectionTarget, 0.11);
-        flowDirection = fishDirectionTarget;
-        flowTempo = lerp(flowTempo, flowTempoTarget, 0.08);
-        time += flowTempo;
-        const scrollBlend = clamp(0.09 * flowTempo, 0.04, 0.18);
-        scrollOffset = lerp(scrollOffset, targetScrollOffset, scrollBlend);
+        time += 1;
+        scrollOffset = lerp(scrollOffset, targetScrollOffset, 0.09);
 
         ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
         ctx.fillRect(0, 0, width, height);
@@ -778,7 +728,6 @@
           event.preventDefault();
           targetScrollOffset = clamp(targetScrollOffset - event.deltaY * 0.00046, SCROLL_MIN, SCROLL_MAX);
           fishDirectionTarget = event.deltaY > 0 ? 1 : -1;
-          flowTempoTarget = clamp(1 + Math.min(0.55, Math.abs(event.deltaY) * 0.0016), 1, 1.55);
           lastWheelAt = performance.now();
           hideCard();
         },
